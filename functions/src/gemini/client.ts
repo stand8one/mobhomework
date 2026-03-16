@@ -25,7 +25,7 @@ export async function analyzeWithGemini(
 ): Promise<unknown> {
   const client = getGeminiClient();
   const model = client.getGenerativeModel({
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash",
     generationConfig: {
       responseMimeType: "application/json",
     },

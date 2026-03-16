@@ -179,7 +179,7 @@ export async function handleCaptureCreated(
       sceneDescription: result.sceneDescription,
       feedbackToChild,
       feedbackToParent,
-      geminiModelUsed: "gemini-2.0-flash",
+      geminiModelUsed: "gemini-2.5-flash",
     });
 
     // 8. 更新 session
