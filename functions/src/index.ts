@@ -1,8 +1,9 @@
-import { onDocumentCreated } from "firebase-functions/v2/firestore";
+import { onDocumentCreated, onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { initializeApp } from "firebase-admin/app";
 
 import { handlePageCreated } from "./onPageCreated";
 import { handleCaptureCreated } from "./onCaptureCreated";
+import { generateSessionSummary } from "./onSessionCompleted";
 
 // 初始化 Firebase Admin
 initializeApp();
@@ -23,4 +24,23 @@ export const onPageCreated = onDocumentCreated(
 export const onCaptureCreated = onDocumentCreated(
   "users/{userId}/sessions/{sessionId}/captures/{captureId}",
   handleCaptureCreated
+);
+
+/**
+ * 当 session 状态变为 completed 时，生成总结报告
+ */
+export const onSessionUpdated = onDocumentUpdated(
+  "users/{userId}/sessions/{sessionId}",
+  async (event) => {
+    const before = event.data?.before.data();
+    const after = event.data?.after.data();
+
+    if (!before || !after) return;
+
+    // 仅在状态从非 completed 变为 completed 时触发
+    if (before.status !== "completed" && after.status === "completed") {
+      const { userId, sessionId } = event.params;
+      await generateSessionSummary(userId, sessionId);
+    }
+  }
 );

@@ -1,5 +1,5 @@
 import { getMessaging } from "firebase-admin/messaging";
-import { getFirestore } from "firebase-admin/app/../firestore";
+import { getFirestore } from "firebase-admin/firestore";
 import { logger } from "firebase-functions";
 
 interface NotificationPayload {

@@ -1,5 +1,5 @@
 import { FirestoreEvent, QueryDocumentSnapshot } from "firebase-functions/v2/firestore";
-import { getFirestore, FieldValue } from "firebase-admin/app/../firestore";
+import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import { analyzeWithGemini } from "./gemini/client";
 import { buildProgressPrompt } from "./gemini/prompts";
@@ -56,10 +56,10 @@ export async function handleCaptureCreated(
 
     const questionsStatus: Record<string, string> = {};
     questionsSnap.docs.forEach((doc) => {
-      questionsStatus[doc.id] = doc.data().status;
+      questionsStatus[doc.id] = doc.data().status as string;
     });
 
-    // 3. 获取照片和视频
+    // 3. 获取照片
     const images: { mimeType: string; data: string }[] = [];
 
     // 获取初始页面照片（参考基准）
@@ -126,8 +126,8 @@ export async function handleCaptureCreated(
 
     const totalQuestions = sessionData.totalQuestions as number;
     const currentCompleted = (sessionData.completedQuestions as number) + completedDelta;
-    const startedAt = (sessionData.startedAt as FirebaseFirestore.Timestamp).toDate();
-    const elapsedMinutes = (Date.now() - startedAt.getTime()) / 60000;
+    const startedAt = sessionData.startedAt as Timestamp;
+    const elapsedMinutes = (Date.now() - startedAt.toMillis()) / 60000;
     const totalEstimated = sessionData.totalEstimatedMinutes as number;
 
     // 按匀速计算预期完成数
@@ -144,10 +144,18 @@ export async function handleCaptureCreated(
     else if (delta >= -3) planStatus = "slightly_behind";
     else planStatus = "significantly_behind";
 
+    // 生成反馈消息
+    const feedbackToChild = generateChildFeedback(planStatus, delta);
+    const feedbackToParent = planStatus === "significantly_behind"
+      ? `作业进度落后较多，落后 ${Math.abs(delta)} 题`
+      : null;
+
     // 7. 写入分析结果
     const analysisRef = db.collection(
       `users/${userId}/sessions/${sessionId}/analyses`
     ).doc();
+
+    const inProgressCount = Object.values(questionsStatus).filter((s) => s === "in_progress").length;
 
     batch.set(analysisRef, {
       captureId,
@@ -157,8 +165,8 @@ export async function handleCaptureCreated(
       questionsProgress: result.questionsProgress,
       overallProgress: {
         completed: currentCompleted,
-        inProgress: Object.values(questionsStatus).filter((s) => s === "in_progress").length,
-        unanswered: totalQuestions - currentCompleted,
+        inProgress: inProgressCount,
+        unanswered: totalQuestions - currentCompleted - inProgressCount,
         total: totalQuestions,
       },
       planComparison: {
@@ -169,6 +177,8 @@ export async function handleCaptureCreated(
       },
       anomalies: result.anomalies,
       sceneDescription: result.sceneDescription,
+      feedbackToChild,
+      feedbackToParent,
       geminiModelUsed: "gemini-2.0-flash",
     });
 
@@ -183,25 +193,21 @@ export async function handleCaptureCreated(
 
     await batch.commit();
 
-    // 10. 生成反馈消息
-    const feedbackToChild = generateChildFeedback(planStatus, delta);
-
-    // 11. 判断是否需要通知家长
+    // 10. 判断是否需要通知家长
     const userSnap = await db.doc(`users/${userId}`).get();
-    const settings = userSnap.data()?.settings;
+    const userData = userSnap.data();
+    const settings = userData?.settings;
+    const childName = userData?.childName || "孩子";
 
     if (planStatus === "significantly_behind" && settings?.notifications?.significantLag) {
       await sendNotification(userId, {
         title: "⚠️ 作业进度提醒",
-        body: `${sessionData.childName || "孩子"}作业进度落后较多，已停滞较长时间`,
+        body: `${childName}作业进度落后较多，已落后 ${Math.abs(delta)} 题`,
         type: "significant_lag",
       });
 
       // 记录事件
-      const eventRef = db.collection(
-        `users/${userId}/sessions/${sessionId}/events`
-      ).doc();
-      batch.set(eventRef, {
+      await db.collection(`users/${userId}/sessions/${sessionId}/events`).add({
         sessionId,
         type: "anomaly",
         subType: "significant_lag",
@@ -217,15 +223,53 @@ export async function handleCaptureCreated(
       if (anomaly === "left_desk" && settings?.notifications?.prolongedLeave) {
         await sendNotification(userId, {
           title: "📝 作业状态",
-          body: `${sessionData.childName || "孩子"}已离开作业区域`,
+          body: `${childName}已离开作业区域`,
           type: "prolonged_leave",
+        });
+
+        await db.collection(`users/${userId}/sessions/${sessionId}/events`).add({
+          sessionId,
+          type: "anomaly",
+          subType: "left_desk",
+          timestamp: FieldValue.serverTimestamp(),
+          message: "离开作业区域",
+          notifiedParent: true,
+          notifiedChild: false,
+        });
+      }
+    }
+
+    // 检测是否全部完成
+    if (currentCompleted >= totalQuestions) {
+      await sessionRef.update({
+        status: "completed",
+        completedAt: FieldValue.serverTimestamp(),
+        actualMinutes: Math.round(elapsedMinutes),
+        efficiencyStars: calculateStars(delta, totalQuestions),
+      });
+
+      if (settings?.notifications?.sessionComplete) {
+        await sendNotification(userId, {
+          title: "🎉 作业完成！",
+          body: `${childName}今天作业全部完成！用时 ${Math.round(elapsedMinutes)} 分钟`,
+          type: "session_complete",
+        });
+
+        await db.collection(`users/${userId}/sessions/${sessionId}/events`).add({
+          sessionId,
+          type: "session_complete",
+          subType: "all_done",
+          timestamp: FieldValue.serverTimestamp(),
+          message: `全部完成！用时 ${Math.round(elapsedMinutes)} 分钟`,
+          notifiedParent: true,
+          notifiedChild: true,
         });
       }
     }
 
     logger.info(
       `Capture ${captureId} analyzed: ${currentCompleted}/${totalQuestions} completed, ` +
-      `plan status: ${planStatus}, delta: ${delta}`
+      `plan: ${planStatus}, delta: ${delta}`
     );
 
   } catch (error) {
@@ -250,4 +294,16 @@ function generateChildFeedback(planStatus: string, delta: number): string {
     default:
       return "继续加油！";
   }
+}
+
+/**
+ * 计算效率星级 (1-5)
+ */
+function calculateStars(delta: number, totalQuestions: number): number {
+  const ratio = delta / Math.max(totalQuestions, 1);
+  if (ratio >= 0.2) return 5;   // 领先 20%+
+  if (ratio >= 0.05) return 4;  // 领先 5%+
+  if (ratio >= -0.05) return 3; // 基本同步
+  if (ratio >= -0.2) return 2;  // 落后 20% 以内
+  return 1;                     // 落后较多
 }

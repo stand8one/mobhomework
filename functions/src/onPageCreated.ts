@@ -1,5 +1,5 @@
 import { FirestoreEvent, QueryDocumentSnapshot } from "firebase-functions/v2/firestore";
-import { getFirestore, FieldValue } from "firebase-admin/app/../firestore";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
 import { analyzeWithGemini } from "./gemini/client";
 import { PAGE_PARSE_PROMPT } from "./gemini/prompts";
@@ -49,8 +49,8 @@ export async function handlePageCreated(
   try {
     // 1. 从 Cloud Storage 获取照片
     const bucket = getStorage().bucket();
-    const file = bucket.file(photoUrl.replace("gs://", "").split("/").slice(1).join("/"));
-    const [photoBuffer] = await file.download();
+    const storagePath = photoUrl.replace(/^gs:\/\/[^/]+\//, "");
+    const [photoBuffer] = await bucket.file(storagePath).download();
     const photoBase64 = photoBuffer.toString("base64");
 
     // 2. 调用 Gemini 解析
