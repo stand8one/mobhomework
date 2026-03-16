@@ -1,0 +1,42 @@
+# Dependencies
+node_modules/
+functions/node_modules/
+web/node_modules/
+
+# Build
+functions/lib/
+web/.next/
+web/out/
+
+# Firebase
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+ui-debug.log
+
+# Android
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/app/google-services.json
+*.apk
+*.aab
+
+# Environment
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+web/.env.local
+
+# IDE
+.idea/
+.vscode/
+*.iml
+.DS_Store
+
+# Misc
+*.log
+npm-debug.log*
