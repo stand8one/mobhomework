@@ -51,6 +51,16 @@ export default function DashboardPage() {
         })}</span>
       </header>
 
+      {/* 导航栏 */}
+      <nav className="nav-bar">
+        {session && (
+          <a href={`/report/${session.id}`} className="nav-link">📝 报告</a>
+        )}
+        <a href="/trends" className="nav-link">📈 趋势</a>
+        <a href="/settings" className="nav-link">⚙️ 设置</a>
+        <a href="/child" className="nav-link">👧 孩子视图</a>
+      </nav>
+
       {/* 一句话状态 */}
       <StatusBanner
         status={session ? (session.status === "completed" ? "completed" : "in_progress") : "no_session"}
@@ -108,12 +118,12 @@ function estimateCompletion(
   total: number,
   completed: number,
   estimatedMinutes: number,
-  startedAt: FirebaseFirestore.Timestamp | null
+  startedAt: { toDate: () => Date } | null
 ): string {
   if (!startedAt || completed === 0) return "计算中...";
 
   const elapsed = (Date.now() - startedAt.toDate().getTime()) / 60000;
-  const rate = completed / elapsed; // 题/分钟
+  const rate = completed / elapsed;
   const remaining = total - completed;
   const etaMinutes = remaining / rate;
 
@@ -138,6 +148,27 @@ const dashboardStyles = `
   .dashboard-header h1 {
     font-size: 24px;
     font-weight: 700;
+  }
+  .nav-bar {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .nav-link {
+    padding: 8px 16px;
+    border-radius: 20px;
+    background: var(--bg-card, #1e293b);
+    color: var(--text-primary, #e2e8f0);
+    text-decoration: none;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: all 0.2s;
+  }
+  .nav-link:hover {
+    background: var(--accent-teal, #4fd1c5);
+    color: white;
   }
   .date {
     font-size: 14px;

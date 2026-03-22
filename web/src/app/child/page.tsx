@@ -2,6 +2,7 @@
 
 import React from "react";
 import { useSession } from "@/hooks/useSession";
+import { useAuth } from "@/hooks/useAuth";
 import ProgressRaceBar from "@/components/ProgressRaceBar";
 
 /**
@@ -9,8 +10,7 @@ import ProgressRaceBar from "@/components/ProgressRaceBar";
  * 设计原则：极简，只有进度条和数字，不分散注意力
  */
 export default function ChildProgressPage() {
-  // TODO: 替换为实际 auth userId
-  const userId = null;
+  const { userId } = useAuth();
   const { session, analyses, loading } = useSession(userId);
 
   if (loading) {

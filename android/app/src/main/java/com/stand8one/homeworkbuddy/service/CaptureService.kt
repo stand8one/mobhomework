@@ -7,10 +7,28 @@ import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.media.MediaPlayer
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.speech.tts.TextToSpeech
+import android.util.Log
+import androidx.camera.core.CameraSelector
+import androidx.camera.core.ImageCapture
+import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
+import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.core.app.NotificationCompat
+import com.google.firebase.auth.FirebaseAuth
+import com.stand8one.homeworkbuddy.repository.CaptureRepository
+import com.stand8one.homeworkbuddy.repository.SessionRepository
+import dagger.hilt.android.AndroidEntryPoint
+import kotlinx.coroutines.*
+import java.io.ByteArrayOutputStream
+import java.util.Locale
+import java.util.concurrent.Executors
+import javax.inject.Inject
 
 /**
  * 作业采集前台服务
@@ -21,8 +39,10 @@ import androidx.core.app.NotificationCompat
  * 3. 电池优化白名单 → 防系统杀进程
  * 4. WorkManager 兜底 → 被杀后自动恢复
  *
- * 除非用户主动结束，否则不会停止运行。
+ * 核心采集流程：
+ * CameraX 拍照 → ImageQualityChecker → CaptureRepository → Cloud Functions
  */
+@AndroidEntryPoint
 class CaptureService : Service() {
 
     companion object {
@@ -30,40 +50,77 @@ class CaptureService : Service() {
         const val NOTIFICATION_ID = 1001
         const val ACTION_START = "com.stand8one.homeworkbuddy.START_CAPTURE"
         const val ACTION_STOP = "com.stand8one.homeworkbuddy.STOP_CAPTURE"
+        const val EXTRA_SESSION_ID = "session_id"
         private const val WAKELOCK_TAG = "HomeworkBuddy:CaptureService"
+        private const val TAG = "CaptureService"
     }
+
+    @Inject lateinit var captureRepository: CaptureRepository
+    @Inject lateinit var sessionRepository: SessionRepository
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var captureTimer: CaptureTimer? = null
+    private var imageCapture: ImageCapture? = null
+    private val cameraExecutor = Executors.newSingleThreadExecutor()
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+    private var currentSessionId: String? = null
+
+    // TTS 用于番茄钟播报
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+
+    // 休息结束提示音
+    private var breakEndPlayer: MediaPlayer? = null
 
     override fun onCreate() {
         super.onCreate()
         createNotificationChannel()
+        initTts()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
-            ACTION_START -> startCapture()
+            ACTION_START -> {
+                currentSessionId = intent.getStringExtra(EXTRA_SESSION_ID)
+                startCapture()
+            }
             ACTION_STOP -> stopCapture()
         }
-        // START_STICKY: 系统杀掉后会尝试重新创建服务
         return START_STICKY
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
-    /**
-     * 启动采集
-     */
+    // ==============================
+    // TTS 初始化
+    // ==============================
+
+    private fun initTts() {
+        tts = TextToSpeech(this) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.language = Locale.CHINESE
+                tts?.setSpeechRate(0.9f) // 稍慢，让孩子听清
+                ttsReady = true
+            }
+        }
+    }
+
+    private fun speak(text: String) {
+        if (ttsReady) {
+            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, "homework_tts")
+        }
+    }
+
+    // ==============================
+    // 采集控制
+    // ==============================
+
     private fun startCapture() {
-        // 1. 启动前台服务 + 通知
         val notification = buildNotification("作业助手运行中", "准备开始...")
         startForeground(NOTIFICATION_ID, notification)
-
-        // 2. 获取 WakeLock，防止 CPU 休眠
         acquireWakeLock()
+        setupCamera()
 
-        // 3. 启动定时采集
         captureTimer = CaptureTimer(
             context = this,
             onCapture = { performCapture() },
@@ -73,43 +130,136 @@ class CaptureService : Service() {
         captureTimer?.start()
     }
 
-    /**
-     * 停止采集（仅用户主动触发）
-     */
     private fun stopCapture() {
         captureTimer?.stop()
         captureTimer = null
         releaseWakeLock()
+        releaseCamera()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
+    // ==============================
+    // CameraX 设置
+    // ==============================
+
+    private fun setupCamera() {
+        imageCapture = ImageCapture.Builder()
+            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+            .build()
+    }
+
+    private fun releaseCamera() {
+        cameraExecutor.shutdown()
+        imageCapture = null
+    }
+
+    // ==============================
+    // 核心采集逻辑
+    // ==============================
+
     /**
-     * 执行一次采集（拍照 + 录视频）
+     * 执行一次采集（拍照 → 质量检查 → 上传 → 写 Firestore）
      */
     private fun performCapture() {
-        // TODO: 调用 CameraService 拍照 + 录视频
-        // TODO: 调用 ImageQualityChecker 检查质量
-        // TODO: 通过 UploadWorker 上传到 Cloud Storage
-        // TODO: 写入 Firestore capture 记录
+        val capture = imageCapture ?: return
+        val sessionId = currentSessionId ?: return
+        val userId = FirebaseAuth.getInstance().currentUser?.uid ?: return
 
-        updateNotification("作业助手运行中", "上次采集: ${getCurrentTime()}")
+        capture.takePicture(
+            cameraExecutor,
+            object : ImageCapture.OnImageCapturedCallback() {
+                override fun onCaptureSuccess(image: ImageProxy) {
+                    serviceScope.launch {
+                        try {
+                            val bitmap = image.toBitmap()
+                            image.close()
+
+                            // 1. 质量检查
+                            val quality = checkImageQuality(bitmap)
+
+                            // 2. 转换为 JPEG bytes
+                            val photoBytes = bitmapToJpegBytes(bitmap, 85)
+
+                            // 3. 上传并写入 Firestore（触发 Cloud Function）
+                            val captureId = captureRepository.createCapture(
+                                userId = userId,
+                                sessionId = sessionId,
+                                photoBytes = photoBytes,
+                                videoBytes = null, // 视频采集后续版本支持
+                                quality = quality
+                            )
+
+                            Log.i(TAG, "Capture $captureId uploaded, quality=$quality")
+                            updateNotification(
+                                "作业助手运行中",
+                                "上次采集: ${getCurrentTime()} · $quality"
+                            )
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Capture failed", e)
+                            updateNotification("作业助手运行中", "采集失败，将在下次重试")
+                        }
+                    }
+                }
+
+                override fun onError(e: ImageCaptureException) {
+                    Log.e(TAG, "Camera capture error", e)
+                }
+            }
+        )
     }
 
     /**
-     * 番茄钟一轮结束 → TTS 播报
+     * 图像质量检查
+     */
+    private fun checkImageQuality(bitmap: Bitmap): String {
+        return when {
+            ImageQualityChecker.isBlurry(bitmap) -> "blurry"
+            ImageQualityChecker.isOccluded(bitmap) -> "occluded"
+            else -> "good"
+        }
+    }
+
+    /**
+     * Bitmap → JPEG ByteArray
+     */
+    private fun bitmapToJpegBytes(bitmap: Bitmap, quality: Int): ByteArray {
+        val stream = ByteArrayOutputStream()
+        bitmap.compress(Bitmap.CompressFormat.JPEG, quality, stream)
+        return stream.toByteArray()
+    }
+
+    // ==============================
+    // 番茄钟回调
+    // ==============================
+
+    /**
+     * 番茄钟一轮结束 → TTS 温柔播报
      */
     private fun onPomodoroRoundEnd(completedQuestions: Int) {
-        // TODO: 用 TextToSpeech 轻声播报
-        // "这一轮你完成了 X 题，太棒了！休息一下吧"
+        if (completedQuestions > 0) {
+            speak("这一轮你完成了${completedQuestions}题，太棒了！休息一下吧。")
+        } else {
+            speak("写了一段时间了，休息一下吧。")
+        }
         updateNotification("☕ 休息时间", "这一轮完成了 $completedQuestions 题")
     }
 
     /**
-     * 休息结束 → 轻提示音
+     * 休息结束 → 轻提示音 + TTS
      */
     private fun onBreakEnd() {
-        // TODO: 播放轻提示音
+        // 播放轻提示音
+        try {
+            breakEndPlayer?.release()
+            breakEndPlayer = MediaPlayer.create(this, android.provider.Settings.System.DEFAULT_NOTIFICATION_URI)
+            breakEndPlayer?.setVolume(0.3f, 0.3f) // 低音量
+            breakEndPlayer?.start()
+            breakEndPlayer?.setOnCompletionListener { it.release() }
+        } catch (e: Exception) {
+            Log.w(TAG, "Break end sound failed", e)
+        }
+        speak("休息结束啦，继续加油！")
         updateNotification("🍅 专注时间", "继续加油！")
     }
 
@@ -123,7 +273,6 @@ class CaptureService : Service() {
             PowerManager.PARTIAL_WAKE_LOCK,
             WAKELOCK_TAG
         ).apply {
-            // 最长 3 小时，超时自动释放防止泄漏
             acquire(3 * 60 * 60 * 1000L)
         }
     }
@@ -144,7 +293,7 @@ class CaptureService : Service() {
             val channel = NotificationChannel(
                 CHANNEL_ID,
                 "作业采集服务",
-                NotificationManager.IMPORTANCE_LOW  // 低重要性，不发声
+                NotificationManager.IMPORTANCE_LOW
             ).apply {
                 description = "作业期间保持后台运行"
                 setShowBadge(false)
@@ -155,14 +304,12 @@ class CaptureService : Service() {
     }
 
     private fun buildNotification(title: String, content: String): Notification {
-        // 点击通知打开 App
         val pendingIntent = PendingIntent.getActivity(
             this, 0,
             packageManager.getLaunchIntentForPackage(packageName),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
 
-        // 停止按钮
         val stopIntent = Intent(this, CaptureService::class.java).apply {
             action = ACTION_STOP
         }
@@ -174,11 +321,11 @@ class CaptureService : Service() {
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle(title)
             .setContentText(content)
-            .setSmallIcon(android.R.drawable.ic_menu_camera)  // TODO: 替换为自定义图标
+            .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentIntent(pendingIntent)
             .addAction(android.R.drawable.ic_media_pause, "结束", stopPendingIntent)
-            .setOngoing(true)  // 不可滑动删除
-            .setSilent(true)   // 静默，不发声
+            .setOngoing(true)
+            .setSilent(true)
             .build()
     }
 
@@ -194,18 +341,21 @@ class CaptureService : Service() {
     }
 
     // ==============================
-    // 系统杀进程后的恢复
+    // 生命周期
     // ==============================
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
-        // App 被从最近任务列表划掉时，服务仍保持运行
-        // START_STICKY 会让系统尝试重建
     }
 
     override fun onDestroy() {
         super.onDestroy()
+        serviceScope.cancel()
         releaseWakeLock()
         captureTimer?.stop()
+        tts?.shutdown()
+        breakEndPlayer?.release()
+        releaseCamera()
     }
 }
+

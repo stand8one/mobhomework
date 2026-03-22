@@ -106,3 +106,63 @@ export const SESSION_SUMMARY_PROMPT = `
 - 绝不使用批评或惩罚性语言
 - 用"你"来称呼孩子
 `;
+
+/**
+ * 云端 Diff 判定 Prompt（Phase 3 核心）
+ *
+ * 输入：原始作业页照片 + 当前采集照片 + 各题 boundingBox
+ * 输出：每个 boundingBox 区域是否有新笔迹（即是否做了题）
+ *
+ * 关键原理：对比同一区域在两个时间点的像素变化，
+ * 新增笔迹（铅笔/按钮/勾选）= 该题正在作答或已完成
+ */
+export function buildDiffDetectionPrompt(
+  questions: Array<{
+    questionId: string;
+    label: string;
+    boundingBox: { x: number; y: number; width: number; height: number };
+    currentStatus: string;
+  }>
+): string {
+  return `
+你是一个作业进度 Diff 检测专家。你的任务是对比同一作业页的【原始照片（拍摄时）】和【当前高拍仪采集照片】。
+
+## 需要检查的题目区域
+${JSON.stringify(questions, null, 2)}
+
+## 分析要求
+
+对于每个题目的 boundingBox 区域：
+1. **对比**该区域在两张图中的差异
+2. **检测**是否有新增笔迹（铅笔字、勾选、擦除痕迹等）
+3. **判定**题目状态：
+   - 无变化 → 保持原状态
+   - 有少量新笔迹 → "in_progress"
+   - 区域大部分已填写 → "completed"
+
+## 返回 JSON 格式
+{
+  "diffResults": [
+    {
+      "questionId": "题目ID",
+      "hasNewInk": true,
+      "inkCoverage": 0.7,
+      "newStatus": "completed",
+      "confidence": 0.9,
+      "description": "检测到大量铅笔笔迹覆盖答题区域"
+    }
+  ],
+  "overallChange": "significant|minor|none",
+  "sceneDescription": "当前场景描述"
+}
+
+## 注意事项
+- **铅笔字迹很浅**，但只要能看到任何笔画变化就应该报告 hasNewInk: true
+- inkCoverage 表示答题区域被笔迹覆盖的比例 (0-1)
+- confidence 低于 0.5 时不应变更题目状态
+- 如果图片模糊或角度偏差大，降低 confidence
+- 只返回检测到变化的题目，无变化的不需要列出
+- 擦除痕迹（橡皮擦痕迹）也算作变化
+`;
+}
+

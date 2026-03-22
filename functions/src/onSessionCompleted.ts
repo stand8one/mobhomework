@@ -1,6 +1,7 @@
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { analyzeWithGemini } from "./gemini/client";
 import { SESSION_SUMMARY_PROMPT } from "./gemini/prompts";
+import { calculateRewards, SessionResult } from "./rewards";
 import { logger } from "firebase-functions";
 
 interface SummaryResult {
@@ -11,7 +12,7 @@ interface SummaryResult {
 }
 
 /**
- * 生成 Session 总结报告
+ * 生成 Session 总结报告 + 计算奖励
  * 在 session 标记为 completed 后调用
  */
 export async function generateSessionSummary(
@@ -76,8 +77,78 @@ export async function generateSessionSummary(
       },
     });
 
+    // === 激励系统：计算奖励 ===
+    try {
+      // 获取历史 sessions（最近 50 条）
+      const historySnap = await db
+        .collection(`users/${userId}/sessions`)
+        .where("status", "==", "completed")
+        .orderBy("completedAt", "desc")
+        .limit(50)
+        .get();
+
+      const history: SessionResult[] = historySnap.docs
+        .filter((doc) => doc.id !== sessionId) // 排除当前
+        .map((doc) => {
+          const d = doc.data();
+          return {
+            sessionId: doc.id,
+            totalQuestions: d.totalQuestions || 0,
+            completedQuestions: d.completedQuestions || 0,
+            totalEstimatedMinutes: d.totalEstimatedMinutes || 0,
+            actualMinutes: d.actualMinutes || 0,
+            aheadOfPlan: d.aheadOfPlan || 0,
+            efficiencyStars: d.efficiencyStars || 0,
+            date: d.completedAt?.toDate?.()?.toISOString?.()?.split("T")[0] || "",
+          };
+        });
+
+      const currentSession: SessionResult = {
+        sessionId,
+        totalQuestions: sessionData.totalQuestions || 0,
+        completedQuestions: sessionData.completedQuestions || 0,
+        totalEstimatedMinutes: sessionData.totalEstimatedMinutes || 0,
+        actualMinutes: sessionData.actualMinutes || 0,
+        aheadOfPlan: sessionData.aheadOfPlan || 0,
+        efficiencyStars: sessionData.efficiencyStars || 0,
+        date: new Date().toISOString().split("T")[0],
+      };
+
+      const reward = calculateRewards(currentSession, history);
+
+      // 写入奖励记录
+      await db.collection(`users/${userId}/rewards`).add({
+        sessionId,
+        points: reward.points,
+        breakdown: reward.breakdown,
+        achievements: reward.achievements,
+        isPersonalBest: reward.isPersonalBest,
+        createdAt: FieldValue.serverTimestamp(),
+      });
+
+      // 更新 session 的奖励数据
+      await db.doc(`users/${userId}/sessions/${sessionId}`).update({
+        reward: {
+          points: reward.points,
+          achievements: reward.achievements,
+          isPersonalBest: reward.isPersonalBest,
+        },
+      });
+
+      // 更新用户总积分
+      await db.doc(`users/${userId}`).update({
+        totalPoints: FieldValue.increment(reward.points),
+      });
+
+      logger.info(`Rewards calculated for ${sessionId}: ${reward.points} points, ${reward.achievements.length} achievements`);
+    } catch (rewardError) {
+      logger.error(`Error calculating rewards for ${sessionId}:`, rewardError);
+      // 奖励计算失败不影响总结报告
+    }
+
     logger.info(`Session summary generated for ${sessionId}`);
   } catch (error) {
     logger.error(`Error generating session summary for ${sessionId}:`, error);
   }
 }
+

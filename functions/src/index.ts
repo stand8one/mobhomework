@@ -4,6 +4,7 @@ import { initializeApp } from "firebase-admin/app";
 import { handlePageCreated } from "./onPageCreated";
 import { handleCaptureCreated } from "./onCaptureCreated";
 import { generateSessionSummary } from "./onSessionCompleted";
+export { scheduledCleanup } from "./scheduledCleanup";
 
 // 初始化 Firebase Admin
 initializeApp();

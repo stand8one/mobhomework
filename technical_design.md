@@ -1,8 +1,9 @@
 # 技术架构设计 — 小学生作业成长助手
 
-> **版本**: v1.0  
-> **日期**: 2026-03-17  
-> **基于**: [产品规格说明书 v0.2](file:///Users/uo/ai/mobhomework/product_spec.md)
+> **版本**: v2.0
+> **日期**: 2026-03-22
+> **状态**: Phase 1-3 全部实现完毕
+> **基于**: [产品规格说明书 v0.3](product_spec.md)
 
 ---
 
@@ -27,7 +28,7 @@ graph TB
     end
 
     subgraph "Web 端"
-        Web["🌐 Web App<br/>Next.js"]
+        Web["🌐 Web App<br/>Next.js + Recharts"]
     end
 
     Android -->|认证| Auth
@@ -59,6 +60,8 @@ flowchart LR
     F -->|实时监听| G["Web App 更新看板"]
     F -->|阈值判断| H["FCM 推送通知"]
     F -->|实时监听| I["Android App 更新进度条"]
+    D -->|Session 完成| J["计算奖励积分"]
+    J --> K["写入 rewards 集合"]
 ```
 
 ---
@@ -70,7 +73,7 @@ flowchart LR
 | **Android App** | Kotlin + Jetpack Compose | 现代 Android 开发标准，声明式 UI |
 | **Android 相机** | CameraX | Google 官方相机库，支持拍照+录像，简化生命周期 |
 | **Android 本地存储** | Room + WorkManager | 离线缓存队列 + 后台上传任务 |
-| **后端认证** | Firebase Auth | 已有账号体系，直接复用 |
+| **后端认证** | Firebase Auth | 匿名认证，自动登录 |
 | **数据库** | Cloud Firestore | 实时同步、离线支持、按文档付费 |
 | **文件存储** | Cloud Storage for Firebase | 大文件（照片/视频）存储 |
 | **云函数** | Cloud Functions (Node.js/TypeScript) | 事件驱动，Firestore onChange 触发 |
@@ -78,6 +81,8 @@ flowchart LR
 | **推送通知** | Firebase Cloud Messaging (FCM) | Android + Web 统一推送 |
 | **Web App** | Next.js + React | SSR/SSG 支持，与 Firebase 集成良好 |
 | **Web 图表** | Recharts | 轻量级 React 图表库，用于效率趋势图 |
+| **Web 测试** | Vitest + Testing Library | 快速、兼容 Next.js |
+| **CF 测试** | Jest + ts-jest | TypeScript 第一类支持 |
 
 ---
 
@@ -89,13 +94,16 @@ flowchart LR
 users/{userId}
 ├── profile (文档字段)
 ├── settings (文档字段)
+├── totalPoints (文档字段)            // 激励系统累计积分
 │
 ├── sessions/{sessionId}           // 每日作业 Session
 │   ├── pages/{pageId}             // 录入的作业页
 │   ├── questions/{questionId}     // 解析出的题目
 │   ├── captures/{captureId}       // 定时采集记录
 │   ├── analyses/{analysisId}      // AI 分析结果
-│   └── events/{eventId}           // 事件日志（异常等）
+│   └── events/{eventId}           // 事件日志
+│
+└── rewards/{rewardId}             // 激励记录
 ```
 
 ### 3.2 文档 Schema 详述
@@ -109,6 +117,7 @@ users/{userId}
   "role": "parent",
   "childName": "小明",
   "gradeLevel": 3,
+  "totalPoints": 156,
   "createdAt": "2026-03-17T00:00:00Z",
   "settings": {
     "pomodoroWorkMinutes": 20,
@@ -132,17 +141,28 @@ users/{userId}
 {
   "userId": "uid_xxx",
   "date": "2026-03-17",
-  "status": "in_progress",          // created | in_progress | completed
+  "status": "completed",
   "startedAt": "2026-03-17T16:30:00Z",
-  "completedAt": null,
+  "completedAt": "2026-03-17T17:22:00Z",
   "totalQuestions": 20,
-  "completedQuestions": 12,
+  "completedQuestions": 20,
   "totalEstimatedMinutes": 45,
-  "actualMinutes": null,
-  "pomodoroCount": 0,
-  "efficiencyStars": null,           // 1-5
-  "aheadOfPlan": 2,                  // 正=领先, 负=落后
-  "currentPageId": "page_003"
+  "actualMinutes": 52,
+  "pomodoroCount": 3,
+  "efficiencyStars": 4,
+  "aheadOfPlan": 2,
+  "currentPageId": "page_003",
+  "summary": {
+    "text": "今天完成得很棒！...",
+    "highlights": ["...", "..."],
+    "suggestions": ["..."],
+    "generatedAt": "..."
+  },
+  "reward": {
+    "points": 26,
+    "achievements": ["streak_3_ahead"],
+    "isPersonalBest": false
+  }
 }
 ```
 
@@ -152,12 +172,13 @@ users/{userId}
 {
   "sessionId": "session_xxx",
   "pageIndex": 1,
-  "subject": "语文",                  // AI 识别或用户标注
+  "subject": "语文",
   "originalPhotoUrl": "gs://...",
   "thumbnailUrl": "gs://...",
   "uploadedAt": "2026-03-17T16:30:00Z",
   "questionsCount": 5,
-  "status": "parsed"                  // uploading | parsing | parsed | error
+  "status": "parsed",
+  "storageCleaned": false
 }
 ```
 
@@ -169,13 +190,12 @@ users/{userId}
   "pageId": "page_001",
   "questionIndex": 3,
   "label": "语文-P12-第3题",
-  "type": "fill_blank",              // fill_blank | choice | calculation | essay | copy | reading
+  "type": "fill_blank",
   "estimatedMinutes": 2,
-  "status": "completed",             // unanswered | in_progress | completed
+  "status": "completed",
   "statusUpdatedAt": "2026-03-17T16:45:00Z",
   "actualMinutes": 1.5,
-  "difficulty": null,                // v2: easy | medium | hard
-  "boundingBox": {                   // 题目在页面照片中的位置
+  "boundingBox": {
     "x": 0.1, "y": 0.3,
     "width": 0.8, "height": 0.15
   }
@@ -190,14 +210,9 @@ users/{userId}
   "capturedAt": "2026-03-17T16:33:00Z",
   "photoUrl": "gs://...",
   "videoUrl": "gs://...",
-  "photoBytesSize": 2048000,
-  "videoDurationSeconds": 5,
-  "quality": "good",                 // good | blurry | occluded | angle_shifted
-  "deviceInfo": {
-    "batteryLevel": 0.72,
-    "isCharging": false
-  },
-  "analysisStatus": "completed"      // pending | processing | completed | skipped
+  "quality": "good",
+  "analysisStatus": "completed",
+  "storageCleaned": false
 }
 ```
 
@@ -206,172 +221,101 @@ users/{userId}
 ```json
 {
   "captureId": "capture_xxx",
-  "sessionId": "session_xxx",
   "analyzedAt": "2026-03-17T16:33:15Z",
   "matchedPageId": "page_001",
   "questionsProgress": [
-    { "questionId": "q_001", "previousStatus": "in_progress", "newStatus": "completed" },
-    { "questionId": "q_002", "previousStatus": "unanswered", "newStatus": "in_progress" }
+    { "questionId": "q_001", "newStatus": "completed", "confidence": 0.95 }
   ],
-  "overallProgress": {
-    "completed": 12,
-    "inProgress": 1,
-    "unanswered": 7,
-    "total": 20
-  },
+  "overallProgress": { "completed": 12, "inProgress": 1, "total": 20 },
   "planComparison": {
     "expectedCompleted": 10,
     "actualCompleted": 12,
     "delta": 2,
-    "status": "ahead"                // ahead | on_track | slightly_behind | significantly_behind
+    "status": "ahead"
   },
-  "anomalies": [],                   // ["stalled", "left_desk", "frequent_erasing"]
+  "anomalies": [],
   "feedbackToChild": "太棒了，你超前了 2 题！",
-  "feedbackToParent": null,          // null = 不打扰
-  "geminiModelUsed": "gemini-2.0-flash",
-  "processingTimeMs": 3200
+  "feedbackToParent": null
 }
 ```
 
-#### `events/{eventId}`
+#### `rewards/{rewardId}`
 
 ```json
 {
   "sessionId": "session_xxx",
-  "type": "anomaly",                 // anomaly | milestone | pomodoro_complete | session_complete
-  "subType": "stalled",              // stalled | left_desk | significant_lag | ahead_of_plan | ...
-  "timestamp": "2026-03-17T16:50:00Z",
-  "message": "已停滞 10 分钟",
-  "notifiedParent": true,
-  "notifiedChild": true
+  "points": 26,
+  "breakdown": {
+    "basePoints": 10,
+    "aheadBonus": 6,
+    "earlyFinishBonus": 0,
+    "personalBestBonus": 10
+  },
+  "achievements": ["streak_3_ahead"],
+  "isPersonalBest": false,
+  "createdAt": "2026-03-17T17:22:15Z"
 }
 ```
 
 ---
 
-## 4. API 设计
+## 4. Cloud Functions 设计
 
-### 4.1 Android → Cloud（通过 Firebase SDK 直接操作）
+### 4.1 事件驱动触发器
 
-Android App 主要通过 Firebase SDK 直接读写 Firestore 和 Cloud Storage，无需自建 REST API。
+| 函数 | 触发器 | 实现文件 |
+|------|--------|----------|
+| `onPageCreated` | `pages/{pageId}` 创建 | `onPageCreated.ts` |
+| `onCaptureCreated` | `captures/{captureId}` 创建 | `onCaptureCreated.ts` |
+| `onSessionUpdated` | `sessions/{sessionId}` 更新 (status→completed) | `index.ts` → `onSessionCompleted.ts` |
+| `scheduledCleanup` | 每 24 小时 | `scheduledCleanup.ts` |
 
-| 操作 | 方式 | 说明 |
+### 4.2 核心处理流
+
+```
+onPageCreated:
+  → 下载照片 → Gemini PAGE_PARSE_PROMPT → 写入 questions → 更新 session.totalQuestions
+
+onCaptureCreated:
+  → 检查 quality → 获取照片+视频 → Gemini buildProgressPrompt
+  → 更新 questions 状态 → 更新 session 进度
+  → logic.ts 纯函数判定 → 通知/事件
+
+onSessionCompleted:
+  → Gemini SESSION_SUMMARY_PROMPT → 写入 summary
+  → rewards.ts 计算积分/成就 → 写入 rewards 集合 → 更新 totalPoints
+
+scheduledCleanup:
+  → 遍历 captures(30天) / pages(90天) → 删除 Storage → 标记 storageCleaned
+```
+
+### 4.3 纯业务逻辑模块 (`logic.ts`)
+
+| 函数 | 用途 | 测试 |
 |------|------|------|
-| 用户认证 | Firebase Auth SDK | 登录/注册 |
-| 上传照片/视频 | Cloud Storage SDK | 上传到 `captures/{sessionId}/{captureId}/` |
-| 创建 Session | Firestore SDK | 写入 `sessions` 集合 |
-| 录入作业页 | Firestore SDK | 写入 `pages` 子集合 + 上传照片 |
-| 写入采集记录 | Firestore SDK | 写入 `captures` 子集合 |
-| 监听分析结果 | Firestore onSnapshot | 实时监听 `analyses` 和 `sessions` 变更 |
-| 接收推送 | FCM SDK | 接收 Agent 发来的通知 |
+| `calculateStars(total, completed, estimated, actual)` | 效率星级 1-5 | 12 tests |
+| `generateChildFeedback(status, delta, completed)` | 鼓励性反馈文案 | 12 tests |
+| `determinePlanStatus(actual, expected)` | ahead/on_track/behind | 包含在反馈测试 |
+| `shouldNotifyParentForLag(delta, stallMinutes)` | 是否推送落后通知 | 5 tests |
+| `shouldNotifyParentForLeave(minutesSinceChange)` | 是否推送离开通知 | 5 tests |
+| `isSessionComplete(completed, total)` | 是否全部完成 | 4 tests |
 
-### 4.2 Cloud Functions（事件驱动）
+### 4.4 激励系统模块 (`rewards.ts`)
 
-```
-┌─────────────────────────────────────────────────────────┐
-│  Cloud Functions (TypeScript)                           │
-├─────────────────────────────────────────────────────────┤
-│                                                         │
-│  onPageCreated(pages/{pageId})                          │
-│    → 调用 Gemini 解析题目                                │
-│    → 写入 questions 子集合                               │
-│    → 更新 session.totalQuestions                         │
-│    → 生成预估计划                                        │
-│                                                         │
-│  onCaptureCreated(captures/{captureId})                  │
-│    → 检查 quality 字段，跳过 occluded/blurry             │
-│    → 从 Storage 获取照片+视频                            │
-│    → 调用 Gemini 分析进度变化                            │
-│    → 写入 analyses 子集合                                │
-│    → 更新 session 进度字段                               │
-│    → 计算 planComparison                                │
-│    → 判断是否触发通知 → FCM                              │
-│    → 写入 events（如有异常/里程碑）                       │
-│                                                         │
-│  onSessionCompleted(sessions/{sessionId})                │
-│    → 生成作业总结报告                                    │
-│    → 计算效率星级                                        │
-│    → 推送完成通知                                        │
-│                                                         │
-│  scheduledCleanup (定时任务)                              │
-│    → 清理过期的 Storage 文件                              │
-│                                                         │
-└─────────────────────────────────────────────────────────┘
-```
+| 函数 | 用途 | 测试 |
+|------|------|------|
+| `calculateRewards(session, history)` | 计算总积分 + 各项明细 | 9 tests |
+| `checkPersonalBest(current, history)` | 效率是否超过历史最佳 | 4 tests |
+| `checkAchievements(current, history)` | 检测新解锁的成就 | 7 tests |
 
-### 4.3 Gemini API 调用策略
+### 4.5 Gemini Prompt 模板 (`prompts.ts`)
 
-#### 作业解析（onPageCreated）
-
-```typescript
-// Prompt 策略
-const parsePrompt = `
-你是一个作业分析助手。请分析这张小学生作业页面的照片。
-
-请识别出页面中的每一道题目，并返回 JSON 格式：
-{
-  "subject": "语文|数学|英语|...",
-  "questions": [
-    {
-      "index": 1,
-      "label": "简短描述，如：第一题 填空",
-      "type": "fill_blank|choice|calculation|essay|copy|reading",
-      "estimatedMinutes": 2,
-      "boundingBox": { "x": 0.1, "y": 0.1, "width": 0.8, "height": 0.15 }
-    }
-  ]
-}
-
-注意：
-- 以单道题目为最小颗粒度
-- boundingBox 使用归一化坐标 (0-1)
-- estimatedMinutes 基于小学生的平均速度预估
-`;
-
-// 调用
-const result = await gemini.generateContent({
-  model: "gemini-2.0-flash",
-  contents: [
-    { role: "user", parts: [
-      { text: parsePrompt },
-      { inlineData: { mimeType: "image/jpeg", data: photoBase64 } }
-    ]}
-  ],
-  generationConfig: { responseMimeType: "application/json" }
-});
-```
-
-#### 进度分析（onCaptureCreated）
-
-```typescript
-const progressPrompt = `
-你是一个作业进度分析助手。
-
-## 初始作业页面（参考基准）
-[附上初始录入的照片]
-
-## 当前采集照片
-[附上最新采集的照片]
-
-## 当前各题状态
-${JSON.stringify(currentQuestionStatuses)}
-
-请对比两张照片，判断各题目的完成状态变化。返回 JSON：
-{
-  "matchedPageId": "page_001 或 null（如不匹配任何已知页面）",
-  "questionsProgress": [
-    { "questionId": "q_001", "newStatus": "completed", "confidence": 0.95 }
-  ],
-  "anomalies": [],
-  "sceneDescription": "孩子正在写第3题的答案"
-}
-
-注意：
-- 如果照片模糊或被遮挡，confidence 设为低值，不要猜测
-- anomalies 可选值: stalled, left_desk, frequent_erasing
-- 铅笔字迹可能很浅，请仔细辨认
-`;
-```
+| Prompt | 用途 |
+|--------|------|
+| `PAGE_PARSE_PROMPT` | 作业页面 → 题目列表 JSON |
+| `buildProgressPrompt(status)` | 进度分析（对比前后照片）|
+| `SESSION_SUMMARY_PROMPT` | 生成友好总结报告 |
+| `buildDiffDetectionPrompt(questions)` | Phase 3：boundingBox 级笔迹 Diff |
 
 ---
 
@@ -399,152 +343,118 @@ graph TB
         SessionRepo["SessionRepository"]
         CaptureRepo["CaptureRepository"]
         MediaRepo["MediaRepository"]
+        PageRepo["PageRepository"]
     end
 
     subgraph "Service Layer"
-        CameraService["CameraService<br/>(CameraX)"]
-        UploadService["UploadWorker<br/>(WorkManager)"]
+        CaptureService["CaptureService<br/>(CameraX + TTS + 音效)"]
         QualityService["ImageQualityChecker"]
-        TimerService["PomodoroService"]
-        FCMService["FCMService"]
+        TimerService["CaptureTimer"]
+        KeepAlive["KeepAliveHelper"]
+        FCMService["HomeworkFCMService"]
     end
 
     subgraph "Local Storage"
-        RoomDB["Room DB<br/>(离线缓存)"]
+        RoomDB["Room DB<br/>(PendingUpload)"]
+        UploadW["UploadWorker<br/>(WorkManager)"]
     end
 
     Login --> AuthVM --> AuthRepo
     Home --> SessionVM --> SessionRepo
     Capture --> CaptureVM --> CaptureRepo
-    Session --> TimerVM --> TimerService
+    Session --> TimerVM
 
-    CaptureVM --> CameraService
-    CaptureVM --> QualityService
-    CaptureRepo --> MediaRepo --> UploadService
-    UploadService --> RoomDB
+    CaptureVM --> CaptureService
+    CaptureService --> QualityService
+    CaptureService --> TimerService
+    CaptureService --> KeepAlive
+    CaptureRepo --> MediaRepo
+    MediaRepo --> RoomDB
+    RoomDB --> UploadW
 ```
 
-### 关键模块说明
+### 关键模块
 
-| 模块 | 职责 |
-|------|------|
-| `CameraService` | 封装 CameraX，支持拍照 + 录像双模式，一次触发同时输出 |
-| `ImageQualityChecker` | 本地图像质量检测：模糊（Laplacian 方差）、遮挡（像素变化率）、视角偏移（特征点匹配） |
-| `UploadWorker` | WorkManager 后台任务，断网时缓存到 Room，恢复后按序上传 |
-| `PomodoroService` | 前台 Service，管理番茄钟倒计时，支持后台运行 |
-| `SessionViewModel` | 监听 Firestore 实时数据，驱动进度赛跑条 UI |
+| 模块 | 文件 | 职责 |
+|------|------|------|
+| `CaptureService` | `service/CaptureService.kt` | 前台服务：CameraX 拍照、ImageQualityChecker、CaptureRepository 上传、TTS 播报、休息音效 |
+| `ImageQualityChecker` | `service/ImageQualityChecker.kt` | 端侧检测：模糊(Laplacian)、遮挡(像素变化)、视角偏移 |
+| `CaptureTimer` | `service/CaptureTimer.kt` | 定时采集调度 |
+| `UploadWorker` | `worker/UploadWorker.kt` | WorkManager 后台: 离线补传按时间排序 |
+| `PendingUpload` | `data/local/PendingUpload.kt` | Room 实体: 离线队列 |
+| `AppDatabase` | `data/local/AppDatabase.kt` | Room Database 单例 |
+| `CaptureViewModel` | `viewmodel/CaptureViewModel.kt` | 拍照+上传: 支持多页连拍 |
 
 ---
 
 ## 6. Web App 模块设计
 
-```
-web-app/
-├── app/
-│   ├── layout.tsx              // 全局布局
-│   ├── page.tsx                // 首页/登录
-│   ├── dashboard/
-│   │   └── page.tsx            // 实时看板
-│   ├── report/
-│   │   ├── page.tsx            // 报告列表
-│   │   └── [sessionId]/
-│   │       └── page.tsx        // 单次作业详细报告
-│   └── settings/
-│       └── page.tsx            // 设置页
-├── components/
-│   ├── ProgressRaceBar.tsx     // 双轨进度赛跑条
-│   ├── StatusBanner.tsx        // 一句话状态横幅
-│   ├── EventStream.tsx         // 异常事件流
-│   ├── QuestionList.tsx        // 题目列表
-│   ├── PomodoroDisplay.tsx     // 番茄钟状态
-│   ├── EfficiencyChart.tsx     // 效率趋势图 (Recharts)
-│   ├── TimelineReplay.tsx      // 时间线回放
-│   └── LatestCapture.tsx       // 最近采集照片
-├── hooks/
-│   ├── useSession.ts           // 实时监听当前 Session
-│   ├── useAnalyses.ts          // 实时监听分析结果
-│   └── useEvents.ts            // 实时监听事件
-├── lib/
-│   ├── firebase.ts             // Firebase 初始化
-│   ├── auth.ts                 // 认证工具
-│   └── notifications.ts        // Web Push 通知
-└── styles/
-    └── globals.css
-```
+### 6.1 路由结构
 
-### Web 端实时数据监听
+| 路由 | 文件 | 功能 |
+|------|------|------|
+| `/` | `app/page.tsx` | 家长看板 + 导航栏 |
+| `/child` | `app/child/page.tsx` | 孩子进度页 |
+| `/report/[sessionId]` | `app/report/[sessionId]/page.tsx` | 作业报告详情（总结+题目+时间线+奖励）|
+| `/trends` | `app/trends/page.tsx` | 效率趋势图（Recharts）|
+| `/settings` | `app/settings/page.tsx` | 设置管理（番茄钟/通知/采集间隔）|
 
-```typescript
-// useSession.ts - 核心 Hook
-export function useSession(userId: string) {
-  // 获取今日 session
-  const todaySession = useFirestoreDoc(`users/${userId}/sessions`, {
-    where: [["date", "==", today()]],
-    orderBy: ["startedAt", "desc"],
-    limit: 1
-  });
+### 6.2 组件
 
-  // 实时监听分析结果
-  const analyses = useFirestoreCollection(
-    `users/${userId}/sessions/${todaySession?.id}/analyses`,
-    { orderBy: ["analyzedAt", "desc"], limit: 20 }
-  );
+| 组件 | 用途 |
+|------|------|
+| `ProgressRaceBar` | 双轨竞速进度条 |
+| `StatusBanner` | 一句话状态横幅 |
+| `EfficiencyChart` | Recharts Area Chart (星级+完成率) |
+| `Timeline` | 时间线回放（垂直，带渐变点） |
+| `QuestionList` | 题目状态列表 |
 
-  // 实时监听事件
-  const events = useFirestoreCollection(
-    `users/${userId}/sessions/${todaySession?.id}/events`,
-    { orderBy: ["timestamp", "desc"] }
-  );
+### 6.3 Hooks
 
-  return { session: todaySession, analyses, events };
-}
-```
+| Hook | 用途 |
+|------|------|
+| `useAuth` | Firebase 匿名认证 + AuthProvider |
+| `useSession` | 实时监听当前 Session + 事件 |
+| `useReport` | 获取报告数据（session + questions + analyses）|
+| `useHistory` | 获取历史 sessions |
 
 ---
 
 ## 7. 部署与基础设施
 
-| 组件 | 部署方式 | 说明 |
-|------|----------|------|
-| Android App | Google Play Store | 标准发布 |
-| Cloud Functions | Firebase CLI deploy | `firebase deploy --only functions` |
-| Firestore | Firebase 自动管理 | 配置安全规则 |
-| Cloud Storage | Firebase 自动管理 | 配置生命周期策略（自动清理过期文件） |
-| Web App | Vercel 或 Firebase Hosting | Next.js 推荐 Vercel 部署 |
+| 组件 | 部署方式 |
+|------|----------|
+| Android App | Google Play Store |
+| Cloud Functions | `firebase deploy --only functions` |
+| Web App | Vercel 或 Firebase Hosting |
+| Firestore 规则 | `firebase deploy --only firestore:rules` |
+| Storage 规则 | `firebase deploy --only storage` |
 
-### Firestore 安全规则（核心）
+### scheduledCleanup
+
+- 每 24 小时运行一次
+- captures: 30 天后删除 Storage 文件
+- pages: 90 天后删除 Storage 文件
+- 删除失败不影响其他文件，标记 `storageCleaned: true`
+
+### Firestore 安全规则
 
 ```javascript
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    // 用户只能访问自己的数据
     match /users/{userId} {
       allow read, write: if request.auth != null && request.auth.uid == userId;
-
       match /sessions/{sessionId} {
         allow read, write: if request.auth != null && request.auth.uid == userId;
-
         match /{subcollection}/{docId} {
           allow read, write: if request.auth != null && request.auth.uid == userId;
         }
       }
-    }
-  }
-}
-```
-
-### Cloud Storage 生命周期
-
-```json
-{
-  "lifecycle": {
-    "rule": [
-      {
-        "action": { "type": "Delete" },
-        "condition": { "age": 30 }
+      match /rewards/{rewardId} {
+        allow read: if request.auth != null && request.auth.uid == userId;
       }
-    ]
+    }
   }
 }
 ```
@@ -557,105 +467,97 @@ service cloud.firestore {
 mobhomework/
 ├── README.md
 ├── product_spec.md
-├── chat.md
 ├── technical_design.md
+├── chat.md
 │
-├── android/                        // Android App
-│   ├── app/
-│   │   ├── src/main/
-│   │   │   ├── java/.../
-│   │   │   │   ├── ui/             // Compose UI
-│   │   │   │   ├── viewmodel/      // ViewModels
-│   │   │   │   ├── repository/     // Repository layer
-│   │   │   │   ├── service/        // Camera, Upload, Timer
-│   │   │   │   ├── model/          // Data classes
-│   │   │   │   └── util/           // ImageQualityChecker 等
-│   │   │   └── res/
-│   │   └── build.gradle.kts
-│   └── build.gradle.kts
-│
-├── functions/                      // Cloud Functions
+├── functions/                      // Cloud Functions (TypeScript)
 │   ├── src/
-│   │   ├── index.ts                // 入口
+│   │   ├── index.ts                // 入口 + 触发器注册
 │   │   ├── onPageCreated.ts        // 作业解析
 │   │   ├── onCaptureCreated.ts     // 进度分析
-│   │   ├── onSessionCompleted.ts   // 报告生成
-│   │   ├── gemini/                 // Gemini API 封装
-│   │   │   ├── client.ts
-│   │   │   ├── prompts.ts
-│   │   │   └── parser.ts
-│   │   └── notifications.ts       // FCM 推送
+│   │   ├── onSessionCompleted.ts   // 报告 + 奖励
+│   │   ├── logic.ts                // 纯业务逻辑
+│   │   ├── rewards.ts              // 激励系统
+│   │   ├── scheduledCleanup.ts     // 定时清理
+│   │   ├── notifications.ts        // FCM 推送
+│   │   ├── gemini/
+│   │   │   ├── client.ts           // Gemini API 封装
+│   │   │   └── prompts.ts          // Prompt 模板 (含 Diff)
+│   │   └── __tests__/              // 81 tests / 7 suites
+│   ├── jest.config.js
 │   ├── package.json
 │   └── tsconfig.json
 │
-├── web/                            // Web App (Next.js)
-│   ├── app/
-│   ├── components/
-│   ├── hooks/
-│   ├── lib/
-│   ├── styles/
-│   ├── package.json
-│   └── next.config.js
+├── android/                        // Android App (Kotlin)
+│   └── app/src/main/java/.../
+│       ├── model/Models.kt
+│       ├── service/
+│       │   ├── CaptureService.kt   // CameraX+TTS+音效
+│       │   ├── CaptureTimer.kt
+│       │   ├── ImageQualityChecker.kt
+│       │   ├── KeepAliveHelper.kt
+│       │   └── HomeworkFCMService.kt
+│       ├── data/local/
+│       │   ├── PendingUpload.kt    // Room 实体
+│       │   ├── PendingUploadDao.kt // Room DAO
+│       │   └── AppDatabase.kt     // Room Database
+│       ├── worker/
+│       │   └── UploadWorker.kt     // WorkManager 补传
+│       ├── repository/             // 5 个 Repository
+│       ├── viewmodel/              // 4 个 ViewModel
+│       ├── ui/screen/              // 6 个 Compose 页面
+│       ├── ui/components/          // 3 个可复用组件
+│       └── di/AppModule.kt         // Hilt DI
 │
-├── firebase.json                   // Firebase 配置
-├── firestore.rules                 // 安全规则
-├── storage.rules                   // Storage 规则
-└── .firebaserc                     // 项目关联
+├── web/                            // Web App (Next.js)
+│   └── src/
+│       ├── app/
+│       │   ├── page.tsx            // 家长看板 + 导航
+│       │   ├── child/page.tsx      // 孩子进度
+│       │   ├── report/[sessionId]/page.tsx  // 报告
+│       │   ├── trends/page.tsx     // 趋势图
+│       │   ├── settings/page.tsx   // 设置
+│       │   ├── layout.tsx
+│       │   └── providers.tsx
+│       ├── components/             // 5 个组件
+│       ├── hooks/                  // 4 个 Hooks
+│       ├── lib/firebase.ts
+│       ├── __tests__/              // 26 tests / 3 suites
+│       └── vitest.config.ts
+│
+├── firebase.json
+├── firestore.rules
+└── storage.rules
 ```
 
 ---
 
-## 9. 开发阶段规划
-
-| 阶段 | 内容 | 预估时间 |
-|------|------|----------|
-| **Phase 1** | Firebase 项目初始化 + 认证 + 数据模型 | 1-2 天 |
-| **Phase 2** | Cloud Functions + Gemini 集成（作业解析 + 进度分析） | 3-4 天 |
-| **Phase 3** | Android App 核心（相机、录入、上传、进度条） | 5-7 天 |
-| **Phase 4** | Web App 核心（看板、报告、设置） | 3-4 天 |
-| **Phase 5** | 集成测试 + 优化 + 异常处理 | 2-3 天 |
-| **Phase 6** | UI 打磨 + 番茄钟完善 + 激励系统 | 2-3 天 |
-
----
-
-## 10. 验证计划
+## 9. 测试覆盖
 
 ### 自动化测试
 
-| 测试类型 | 范围 | 命令 |
-|----------|------|------|
-| Cloud Functions 单元测试 | Gemini prompt 解析、进度计算逻辑、通知阈值判断 | `cd functions && npm test` |
-| Firestore 规则测试 | 安全规则验证 | `firebase emulators:exec --only firestore "npm test"` |
-| Android 单元测试 | ImageQualityChecker、ViewModel 逻辑 | `cd android && ./gradlew test` |
-| Web 组件测试 | ProgressRaceBar 渲染逻辑 | `cd web && npm test` |
+| 测试类型 | 套件 | 用例 | 命令 |
+|----------|------|------|------|
+| CF 纯函数测试 | 3 | 48 | `cd functions && npm test` |
+| CF 集成测试 | 3 | 21 | 同上 |
+| CF Diff 测试 | 1 | 3 | 同上 |
+| CF 激励系统 | 1 | 20 | 同上 |
+| Web 看板逻辑 | 1 | 7 | `cd web && npx vitest run` |
+| Web 认证逻辑 | 1 | 5 | 同上 |
+| Web 进度条逻辑 | 1 | 14 | 同上 |
+| **总计** | **10** | **107** | ✅ 全部通过 |
 
-### 集成验证（Firebase Emulator）
+### 集成验证
 
 ```bash
-# 启动本地模拟器
 firebase emulators:start --only functions,firestore,storage
-
-# 模拟完整流程:
-# 1. 写入 page 文档 → 验证 onPageCreated 触发 → 验证 questions 生成
-# 2. 写入 capture 文档 → 验证 onCaptureCreated 触发 → 验证 analysis 生成
-# 3. 验证进度计算和通知逻辑
 ```
 
 ### 手动验证
 
-1. **Android 拍照流程**：安装 App → 创建 Session → 拍照录入 → 确认上传成功 → 确认 Gemini 解析出题目
-2. **进度采集流程**：开启高拍仪模式 → 等待 3 分钟自动采集 → 确认照片+视频均上传 → 确认进度更新
-3. **Web 看板实时性**：打开 Web App → Android 端触发采集 → 确认 Web 端进度条实时更新
-4. **推送通知**：模拟进度明显落后 → 确认家长端（Web）收到推送通知
-5. **离线恢复**：断开 Android 网络 → 拍照 → 恢复网络 → 确认积压数据补传
-
-## User Review Required
-
-> [!IMPORTANT]
-> 以下决策需要确认：
-
-1. **Firebase 项目**：是否已有 Firebase 项目，还是需要新建？需要哪个 GCP 区域？
-2. **Gemini API Key**：是否已有 Gemini API 密钥？
-3. **Web App 部署**：Vercel（推荐）还是 Firebase Hosting？
-4. **Android 最低版本**：支持到 Android 多少？建议 API 26 (Android 8.0)
-5. **开发优先级**：从哪个 Phase 开始？建议从 Phase 1（Firebase 基础设施）开始
+1. Android 拍照 → 上传 → Gemini 解析出题目
+2. 高拍仪模式 → 3 分钟自动采集 → 进度更新
+3. Web 看板实时性 → Android 采集 → Web 进度条更新
+4. 推送通知 → 模拟落后 → 家长收到 FCM
+5. 离线恢复 → 断网拍照 → Room 缓存 → 恢复后 WorkManager 补传
+6. 激励系统 → Session 完成 → 积分/成就计算 → 报告页展示

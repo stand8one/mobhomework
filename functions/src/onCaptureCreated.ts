@@ -5,6 +5,14 @@ import { analyzeWithGemini } from "./gemini/client";
 import { buildProgressPrompt } from "./gemini/prompts";
 import { sendNotification } from "./notifications";
 import { logger } from "firebase-functions";
+import {
+  generateChildFeedback,
+  determinePlanStatus,
+  calculateStars,
+  shouldNotifyParentForLag,
+  shouldNotifyParentForLeave,
+  isSessionComplete,
+} from "./logic";
 
 interface QuestionProgress {
   questionId: string;
@@ -138,11 +146,7 @@ export async function handleCaptureCreated(
     const delta = currentCompleted - expectedCompleted;
 
     // 判断进度状态
-    let planStatus: string;
-    if (delta > 0) planStatus = "ahead";
-    else if (delta >= -1) planStatus = "on_track";
-    else if (delta >= -3) planStatus = "slightly_behind";
-    else planStatus = "significantly_behind";
+    const planStatus = determinePlanStatus(delta);
 
     // 生成反馈消息
     const feedbackToChild = generateChildFeedback(planStatus, delta);
@@ -199,7 +203,7 @@ export async function handleCaptureCreated(
     const settings = userData?.settings;
     const childName = userData?.childName || "孩子";
 
-    if (planStatus === "significantly_behind" && settings?.notifications?.significantLag) {
+    if (shouldNotifyParentForLag(planStatus, settings?.notifications || {})) {
       await sendNotification(userId, {
         title: "⚠️ 作业进度提醒",
         body: `${childName}作业进度落后较多，已落后 ${Math.abs(delta)} 题`,
@@ -220,7 +224,7 @@ export async function handleCaptureCreated(
 
     // 记录异常事件
     for (const anomaly of result.anomalies) {
-      if (anomaly === "left_desk" && settings?.notifications?.prolongedLeave) {
+      if (anomaly === "left_desk" && shouldNotifyParentForLeave(result.anomalies, settings?.notifications || {})) {
         await sendNotification(userId, {
           title: "📝 作业状态",
           body: `${childName}已离开作业区域`,
@@ -240,7 +244,7 @@ export async function handleCaptureCreated(
     }
 
     // 检测是否全部完成
-    if (currentCompleted >= totalQuestions) {
+    if (isSessionComplete(currentCompleted, totalQuestions)) {
       await sessionRef.update({
         status: "completed",
         completedAt: FieldValue.serverTimestamp(),
@@ -278,32 +282,4 @@ export async function handleCaptureCreated(
   }
 }
 
-/**
- * 生成给孩子的反馈消息
- */
-function generateChildFeedback(planStatus: string, delta: number): string {
-  switch (planStatus) {
-    case "ahead":
-      return `太棒了，你比计划快了 ${delta} 题！继续保持 🎉`;
-    case "on_track":
-      return "节奏很好，继续保持 👍";
-    case "slightly_behind":
-      return `加把劲，还差 ${Math.abs(delta)} 题追上计划 💪`;
-    case "significantly_behind":
-      return "休息一下再继续吧，你已经很棒了 ❤️";
-    default:
-      return "继续加油！";
-  }
-}
-
-/**
- * 计算效率星级 (1-5)
- */
-function calculateStars(delta: number, totalQuestions: number): number {
-  const ratio = delta / Math.max(totalQuestions, 1);
-  if (ratio >= 0.2) return 5;   // 领先 20%+
-  if (ratio >= 0.05) return 4;  // 领先 5%+
-  if (ratio >= -0.05) return 3; // 基本同步
-  if (ratio >= -0.2) return 2;  // 落后 20% 以内
-  return 1;                     // 落后较多
-}
+// Pure functions are now imported from ./logic.ts
