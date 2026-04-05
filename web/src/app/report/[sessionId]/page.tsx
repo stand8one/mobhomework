@@ -1,13 +1,15 @@
 "use client";
 
+import { use } from "react";
 import { useAuth } from "@/hooks/useAuth";
 import { useReport } from "@/hooks/useReport";
 import Timeline from "@/components/Timeline";
 import QuestionList from "@/components/QuestionList";
 
-export default function ReportPage({ params }: { params: { sessionId: string } }) {
+export default function ReportPage({ params }: { params: Promise<{ sessionId: string }> }) {
+  const { sessionId } = use(params);
   const { userId } = useAuth();
-  const { session, questions, analyses, loading } = useReport(userId, params.sessionId);
+  const { session, questions, analyses, loading } = useReport(userId, sessionId);
 
   if (loading) {
     return (

@@ -1,4 +1,4 @@
-import { buildDiffDetectionPrompt } from "../gemini/prompts";
+import { buildDiffDetectionPrompt } from "../ai/prompts";
 
 describe("C1: 云端 Diff 判定", () => {
   describe("buildDiffDetectionPrompt", () => {
