@@ -35,12 +35,12 @@ jest.mock("firebase-admin/firestore", () => ({
   },
 }));
 
-const mockAnalyzeWithGemini = jest.fn();
-jest.mock("../gemini/client", () => ({
-  analyzeWithGemini: (...args: unknown[]) => mockAnalyzeWithGemini(...args),
+const mockAnalyzeWithAI = jest.fn();
+jest.mock("../ai", () => ({
+  analyzeWithAI: (...args: unknown[]) => mockAnalyzeWithAI(...args),
 }));
 
-jest.mock("../gemini/prompts", () => ({
+jest.mock("../ai/prompts", () => ({
   SESSION_SUMMARY_PROMPT: "Generate a session summary.",
 }));
 
@@ -87,7 +87,7 @@ describe("CF-5: 全部完成→总结报告", () => {
       ],
     });
 
-    mockAnalyzeWithGemini.mockResolvedValue({
+    mockAnalyzeWithAI.mockResolvedValue({
       summary: "今天表现很出色！数学计算完成得很快。",
       highlights: ["计算题完成速度超预期", "全程专注度高"],
       suggestions: ["填空题可以再仔细检查一下"],
@@ -97,8 +97,8 @@ describe("CF-5: 全部完成→总结报告", () => {
     await generateSessionSummary("u1", "s1");
 
     // 验证：Gemini 被调用
-    expect(mockAnalyzeWithGemini).toHaveBeenCalledTimes(1);
-    const promptArg = mockAnalyzeWithGemini.mock.calls[0][0] as string;
+    expect(mockAnalyzeWithAI).toHaveBeenCalledTimes(1);
+    const promptArg = mockAnalyzeWithAI.mock.calls[0][0] as string;
     expect(promptArg).toContain("Generate a session summary");
     expect(promptArg).toContain("totalQuestions");
 
@@ -135,14 +135,14 @@ describe("CF-5: 全部完成→总结报告", () => {
 
     mockAnalysesGet.mockResolvedValue({ docs: [] });
 
-    mockAnalyzeWithGemini.mockResolvedValue({
+    mockAnalyzeWithAI.mockResolvedValue({
       summary: "好", highlights: [], suggestions: [], efficiencyStars: 3,
     });
 
     await generateSessionSummary("u1", "s1");
 
     // 验证 prompt 包含题目类型统计
-    const promptArg = mockAnalyzeWithGemini.mock.calls[0][0] as string;
+    const promptArg = mockAnalyzeWithAI.mock.calls[0][0] as string;
     const contextMatch = promptArg.match(/## 作业数据\n([\s\S]+)/);
     expect(contextMatch).toBeTruthy();
     const contextData = JSON.parse(contextMatch![1]);
@@ -176,13 +176,13 @@ describe("CF-5: 全部完成→总结报告", () => {
       ],
     });
 
-    mockAnalyzeWithGemini.mockResolvedValue({
+    mockAnalyzeWithAI.mockResolvedValue({
       summary: "有些分心", highlights: [], suggestions: [], efficiencyStars: 2,
     });
 
     await generateSessionSummary("u1", "s1");
 
-    const promptArg = mockAnalyzeWithGemini.mock.calls[0][0] as string;
+    const promptArg = mockAnalyzeWithAI.mock.calls[0][0] as string;
     const contextData = JSON.parse(promptArg.split("## 作业数据\n")[1]);
     expect(contextData.anomalyCount).toBe(2); // 2 analyses had anomalies
   });
@@ -191,7 +191,7 @@ describe("CF-5: 全部完成→总结报告", () => {
     mockSessionGet.mockResolvedValue({ data: () => undefined });
 
     await expect(generateSessionSummary("u1", "s1")).resolves.not.toThrow();
-    expect(mockAnalyzeWithGemini).not.toHaveBeenCalled();
+    expect(mockAnalyzeWithAI).not.toHaveBeenCalled();
   });
 
   it("Gemini 出错 → 不崩溃", async () => {
@@ -204,7 +204,7 @@ describe("CF-5: 全部完成→总结报告", () => {
     });
     mockQuestionsGet.mockResolvedValue({ docs: [] });
     mockAnalysesGet.mockResolvedValue({ docs: [] });
-    mockAnalyzeWithGemini.mockRejectedValue(new Error("API error"));
+    mockAnalyzeWithAI.mockRejectedValue(new Error("API error"));
 
     await expect(generateSessionSummary("u1", "s1")).resolves.not.toThrow();
     expect(mockSessionUpdate).not.toHaveBeenCalled();

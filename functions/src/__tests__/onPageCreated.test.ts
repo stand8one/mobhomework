@@ -44,10 +44,10 @@ jest.mock("firebase-admin/storage", () => ({
   })),
 }));
 
-// Mock Gemini client
-const mockAnalyzeWithGemini = jest.fn();
-jest.mock("../gemini/client", () => ({
-  analyzeWithGemini: (...args: unknown[]) => mockAnalyzeWithGemini(...args),
+// Mock AI client
+const mockAnalyzeWithAI = jest.fn();
+jest.mock("../ai", () => ({
+  analyzeWithAI: (...args: unknown[]) => mockAnalyzeWithAI(...args),
 }));
 
 // Mock firebase-functions logger
@@ -92,7 +92,7 @@ describe("CF-1: 拍照上传后 AI 识别出题目", () => {
         boundingBox: { x: 0.1, y: 0.1 * (i + 1), width: 0.8, height: 0.08 },
       })),
     };
-    mockAnalyzeWithGemini.mockResolvedValue(geminiResult);
+    mockAnalyzeWithAI.mockResolvedValue(geminiResult);
 
     const event = createMockEvent(
       { originalPhotoUrl: "gs://bucket/users/u1/pages/photo.jpg" },
@@ -102,7 +102,7 @@ describe("CF-1: 拍照上传后 AI 识别出题目", () => {
     await handlePageCreated(event);
 
     // 验证：调用了 Gemini
-    expect(mockAnalyzeWithGemini).toHaveBeenCalledTimes(1);
+    expect(mockAnalyzeWithAI).toHaveBeenCalledTimes(1);
 
     // 验证：写入了 8 个 question 文档
     expect(mockBatchSet).toHaveBeenCalledTimes(8);
@@ -125,7 +125,7 @@ describe("CF-1: 拍照上传后 AI 识别出题目", () => {
   });
 
   it("更新 page 状态为 parsed", async () => {
-    mockAnalyzeWithGemini.mockResolvedValue({
+    mockAnalyzeWithAI.mockResolvedValue({
       subject: "语文",
       pageDescription: "语文阅读",
       questions: [
@@ -153,7 +153,7 @@ describe("CF-1: 拍照上传后 AI 识别出题目", () => {
   });
 
   it("session.totalQuestions 和 totalEstimatedMinutes 增量更新", async () => {
-    mockAnalyzeWithGemini.mockResolvedValue({
+    mockAnalyzeWithAI.mockResolvedValue({
       subject: "数学",
       pageDescription: "",
       questions: [
@@ -180,7 +180,7 @@ describe("CF-1: 拍照上传后 AI 识别出题目", () => {
   });
 
   it("照片模糊 → Gemini 返回空 questions → page 标记 parsed，不报错", async () => {
-    mockAnalyzeWithGemini.mockResolvedValue({
+    mockAnalyzeWithAI.mockResolvedValue({
       subject: "未知",
       pageDescription: "照片模糊",
       questions: [],
@@ -206,7 +206,7 @@ describe("CF-1: 拍照上传后 AI 识别出题目", () => {
   });
 
   it("Gemini API 出错 → page 标记 error", async () => {
-    mockAnalyzeWithGemini.mockRejectedValue(new Error("Gemini API timeout"));
+    mockAnalyzeWithAI.mockRejectedValue(new Error("Gemini API timeout"));
 
     const event = createMockEvent(
       { originalPhotoUrl: "gs://bucket/path/photo.jpg" },
@@ -223,14 +223,14 @@ describe("CF-1: 拍照上传后 AI 识别出题目", () => {
   it("event.data 为 undefined → 直接返回", async () => {
     const event = { data: undefined, params: {} } as any;
     await expect(handlePageCreated(event)).resolves.not.toThrow();
-    expect(mockAnalyzeWithGemini).not.toHaveBeenCalled();
+    expect(mockAnalyzeWithAI).not.toHaveBeenCalled();
   });
 
   it("Storage 下载照片 → 转 base64 传给 Gemini", async () => {
     const fakeImageData = Buffer.from("real_image_bytes");
     mockDownload.mockResolvedValue([fakeImageData]);
 
-    mockAnalyzeWithGemini.mockResolvedValue({
+    mockAnalyzeWithAI.mockResolvedValue({
       subject: "英语", pageDescription: "", questions: [],
     });
 
@@ -242,7 +242,7 @@ describe("CF-1: 拍照上传后 AI 识别出题目", () => {
     await handlePageCreated(event);
 
     // 验证 Gemini 收到了 base64 编码的图片
-    const geminiCall = mockAnalyzeWithGemini.mock.calls[0];
+    const geminiCall = mockAnalyzeWithAI.mock.calls[0];
     expect(geminiCall[1]).toEqual([
       { mimeType: "image/jpeg", data: fakeImageData.toString("base64") },
     ]);

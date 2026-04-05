@@ -1,8 +1,8 @@
 import { FirestoreEvent, QueryDocumentSnapshot } from "firebase-functions/v2/firestore";
 import { getFirestore, FieldValue, Timestamp } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
-import { analyzeWithGemini } from "./gemini/client";
-import { buildProgressPrompt } from "./gemini/prompts";
+import { analyzeWithAI, getAIModelName } from "./ai";
+import { buildProgressPrompt } from "./ai/prompts";
 import { sendNotification } from "./notifications";
 import { logger } from "firebase-functions";
 import {
@@ -101,7 +101,7 @@ export async function handleCaptureCreated(
     const prompt = buildProgressPrompt(questionsStatus);
     await snapshot.ref.update({ analysisStatus: "processing" });
 
-    const result = await analyzeWithGemini(prompt, images, video) as ProgressResult;
+    const result = await analyzeWithAI(prompt, images, video) as ProgressResult;
 
     // 5. 更新题目状态
     const batch = db.batch();
@@ -183,7 +183,7 @@ export async function handleCaptureCreated(
       sceneDescription: result.sceneDescription,
       feedbackToChild,
       feedbackToParent,
-      geminiModelUsed: "gemini-2.5-flash",
+      aiModelUsed: getAIModelName(),
     });
 
     // 8. 更新 session

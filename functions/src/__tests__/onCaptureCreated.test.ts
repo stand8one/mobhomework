@@ -80,14 +80,15 @@ jest.mock("firebase-admin/storage", () => ({
   })),
 }));
 
-// Mock Gemini
-const mockAnalyzeWithGemini = jest.fn();
-jest.mock("../gemini/client", () => ({
-  analyzeWithGemini: (...args: unknown[]) => mockAnalyzeWithGemini(...args),
+// Mock AI
+const mockAnalyzeWithAI = jest.fn();
+jest.mock("../ai", () => ({
+  analyzeWithAI: (...args: unknown[]) => mockAnalyzeWithAI(...args),
+  getAIModelName: () => "test-model",
 }));
 
 // Mock prompts
-jest.mock("../gemini/prompts", () => ({
+jest.mock("../ai/prompts", () => ({
   buildProgressPrompt: jest.fn(() => "mock_prompt"),
 }));
 
@@ -168,7 +169,7 @@ function setupDefaultMocks(overrides: {
   });
 
   // Gemini result
-  mockAnalyzeWithGemini.mockResolvedValue(overrides.geminiResult || {
+  mockAnalyzeWithAI.mockResolvedValue(overrides.geminiResult || {
     matchedPageId: "page_001",
     questionsProgress: [
       { questionId: "q1", newStatus: "completed", confidence: 0.95 },
@@ -196,7 +197,7 @@ describe("CF-2: 采集→进度检测", () => {
     await handleCaptureCreated(event);
 
     // 不应调用 Gemini
-    expect(mockAnalyzeWithGemini).not.toHaveBeenCalled();
+    expect(mockAnalyzeWithAI).not.toHaveBeenCalled();
     // capture 标记 skipped
     expect(event.data.ref.update).toHaveBeenCalledWith({ analysisStatus: "skipped" });
   });
@@ -208,7 +209,7 @@ describe("CF-2: 采集→进度检测", () => {
     );
 
     await handleCaptureCreated(event);
-    expect(mockAnalyzeWithGemini).not.toHaveBeenCalled();
+    expect(mockAnalyzeWithAI).not.toHaveBeenCalled();
     expect(event.data.ref.update).toHaveBeenCalledWith({ analysisStatus: "skipped" });
   });
 
@@ -222,7 +223,7 @@ describe("CF-2: 采集→进度检测", () => {
     await handleCaptureCreated(event);
 
     // 应调用 Gemini
-    expect(mockAnalyzeWithGemini).toHaveBeenCalledTimes(1);
+    expect(mockAnalyzeWithAI).toHaveBeenCalledTimes(1);
     // batch commit 被调用
     expect(mockBatchCommit).toHaveBeenCalled();
   });

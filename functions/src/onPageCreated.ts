@@ -1,8 +1,8 @@
 import { FirestoreEvent, QueryDocumentSnapshot } from "firebase-functions/v2/firestore";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import { getStorage } from "firebase-admin/storage";
-import { analyzeWithGemini } from "./gemini/client";
-import { PAGE_PARSE_PROMPT } from "./gemini/prompts";
+import { analyzeWithAI } from "./ai";
+import { PAGE_PARSE_PROMPT } from "./ai/prompts";
 import { logger } from "firebase-functions";
 
 interface ParsedQuestion {
@@ -54,7 +54,7 @@ export async function handlePageCreated(
     const photoBase64 = photoBuffer.toString("base64");
 
     // 2. 调用 Gemini 解析
-    const result = await analyzeWithGemini(
+    const result = await analyzeWithAI(
       PAGE_PARSE_PROMPT,
       [{ mimeType: "image/jpeg", data: photoBase64 }]
     ) as ParseResult;

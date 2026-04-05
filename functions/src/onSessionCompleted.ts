@@ -1,6 +1,6 @@
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
-import { analyzeWithGemini } from "./gemini/client";
-import { SESSION_SUMMARY_PROMPT } from "./gemini/prompts";
+import { analyzeWithAI } from "./ai";
+import { SESSION_SUMMARY_PROMPT } from "./ai/prompts";
 import { calculateRewards, SessionResult } from "./rewards";
 import { logger } from "firebase-functions";
 
@@ -65,7 +65,7 @@ export async function generateSessionSummary(
 
     const prompt = `${SESSION_SUMMARY_PROMPT}\n\n## 作业数据\n${JSON.stringify(contextData, null, 2)}`;
 
-    const result = await analyzeWithGemini(prompt, []) as SummaryResult;
+    const result = await analyzeWithAI(prompt, []) as SummaryResult;
 
     // 写入总结
     await db.doc(`users/${userId}/sessions/${sessionId}`).update({
