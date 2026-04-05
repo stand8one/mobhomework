@@ -137,6 +137,26 @@ Web App:         26 tests / 3 suites ✅
 Total:           107 tests / 10 suites ✅
 ```
 
+### Cloud Functions (81 tests)
+
+| Suite | Tests | Covers |
+|-------|-------|--------|
+| `onPageCreated` | 15 | AI question parsing, multi-page binding, error recovery |
+| `onCaptureCreated` | 18 | Progress diff detection, plan comparison, parent notification triggers |
+| `onSessionCompleted` | 5 | Summary report generation, context data assembly, error handling |
+| `feedbackAndNotifications` | 21 | Plan status → feedback message mapping, FCM push conditions, edge cases |
+| `calculateStars` | 11 | Efficiency star rating (1–5), boundary values, divide-by-zero safety |
+| `rewards` | 8 | Ahead bonus, early finish, streak achievements, personal best |
+| `diffDetection` | 3 | Diff prompt generation, boundingBox inclusion, empty input safety |
+
+### Web App (26 tests)
+
+| Suite | Tests | Covers |
+|-------|-------|--------|
+| `useSession` | 7 | Dashboard state derivation, expected progress calculation, edge cases |
+| `progressRaceBar` | 14 | Bar width calculation, badge info mapping, actual vs. planned comparison |
+| `auth` | 5 | Anonymous auth state resolution, loading priority, error propagation |
+
 ## Documentation
 
 - [📝 Product Specification (v0.3)](product_spec.md)

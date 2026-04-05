@@ -206,6 +206,26 @@ Web App:         26 tests / 3 suites ✅
 总计:            107 tests / 10 suites ✅
 ```
 
+### Cloud Functions (81 tests)
+
+| 测试套件 | 用例数 | 覆盖范围 |
+|----------|--------|----------|
+| `onPageCreated` | 15 | AI 题目解析、多页绑定、错误恢复 |
+| `onCaptureCreated` | 18 | 进度 Diff 检测、计划对比、家长通知触发条件 |
+| `onSessionCompleted` | 5 | 总结报告生成、上下文数据组装、异常处理 |
+| `feedbackAndNotifications` | 21 | 计划状态 → 反馈消息映射、FCM 推送条件、边界值 |
+| `calculateStars` | 11 | 效率星级（1–5 星）、边界值、除零安全 |
+| `rewards` | 8 | 超越计划奖、提前完成奖、连续领先成就、个人最佳 |
+| `diffDetection` | 3 | Diff Prompt 生成、boundingBox 包含性、空输入安全 |
+
+### Web App (26 tests)
+
+| 测试套件 | 用例数 | 覆盖范围 |
+|----------|--------|----------|
+| `useSession` | 7 | 看板状态推导、预期进度计算、边界情况 |
+| `progressRaceBar` | 14 | 进度条宽度计算、徽章状态映射、实际 vs 计划对比 |
+| `auth` | 5 | 匿名认证状态解析、Loading 优先级、错误传播 |
+
 ## License
 
 [MIT](LICENSE) © stand8one
