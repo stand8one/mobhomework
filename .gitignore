@@ -23,13 +23,23 @@ android/app/google-services.json
 *.apk
 *.aab
 
-# Environment
+# Environment & Secrets
 .env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-web/.env.local
+.env.*
+!.env.example
+functions/.env*
+!functions/.env.example
+web/.env*
+!web/.env.example
+
+# Credentials & Keys
+*.pem
+*.key
+*.p12
+*.jks
+service-account*.json
+*-credentials.json
+*serviceAccountKey*.json
 
 # IDE
 .idea/
