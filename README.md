@@ -114,6 +114,14 @@ mobhomework/
 │       └── ...                      # Business logic & triggers
 ├── web/                # Web App (Next.js + React + Recharts)
 ├── android/            # Android App (Kotlin + Jetpack Compose)
+│   └── app/src/main/java/.../
+│       ├── service/                  # CaptureService, CameraX, TTS, timer
+│       ├── ui/screen/                # Compose screens (Home, Capture, Session, etc.)
+│       ├── ui/components/            # ProgressRaceBar, ReviewQuestionsSheet, Pomodoro
+│       ├── viewmodel/                # MVVM ViewModels
+│       ├── repository/               # Firebase data repositories
+│       ├── data/local/               # Room offline queue (PendingUpload)
+│       └── worker/                   # WorkManager upload retry
 ├── firestore.rules     # Firestore security rules
 ├── storage.rules       # Cloud Storage security rules
 ├── firebase.json       # Firebase project config
